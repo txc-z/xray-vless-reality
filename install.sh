@@ -454,7 +454,8 @@ cat > /usr/local/etc/xray/config.json <<-EOF
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"]
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
       }
     }
   ],
