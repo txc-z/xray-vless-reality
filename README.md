@@ -5,7 +5,7 @@ Xray **VLESS + REALITY** 极简一键安装脚本，基于 [crazypeace/xray-vles
 与原版唯一的实质区别：生成的服务端配置合并了 XTLS 官方的 **REALITY 防偷跑（防被借道）** 写法，未授权回落流量只能到达指定的伪装目标站，无法被他人拿你的服务器 IP 当跳板白嫖目标站的流量。
 
 - 参考资料（官方示例）：<https://github.com/XTLS/Xray-examples/blob/main/VLESS-TCP-REALITY%20(without%20being%20stolen)/config_server.jsonc>
-- 脚本安装的 Xray 版本：v25.10.15（脚本内写死）
+
 
 ## 防偷跑原理
 
