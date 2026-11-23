@@ -99,11 +99,11 @@ if [[ $_use_env_vars -eq 1 ]]; then
         port=443
     fi
 
-    # _MYDOMAIN_: 域名, 默认 learn.microsoft.com
+    # _MYDOMAIN_: 域名, 默认 speed.cloudflare.com (防偷跑已启用: 未授权回落只放行去这个域名, 与官方防偷跑例一致)
     if [[ -n "${_MYDOMAIN_}" ]]; then
         domain="${_MYDOMAIN_}"
     else
-        domain="learn.microsoft.com"
+        domain="speed.cloudflare.com"
     fi
 
     # _MYUUID_: UUID, 默认使用种子生成的 UUID
@@ -154,7 +154,7 @@ elif [ $# -ge 1 ]; then
     # 第3个参数是域名
     domain=${3}
     if [[ -z $domain ]]; then
-      domain="learn.microsoft.com"
+      domain="speed.cloudflare.com"
     fi
 
     # 第4个参数是UUID
@@ -365,8 +365,8 @@ fi
 # 目标网站
 if [[ -z $domain ]]; then
   echo -e "请输入一个 ${magenta}合适的域名${none} Input the domain"
-  read -p "(例如: learn.microsoft.com): " domain
-  [ -z "$domain" ] && domain="learn.microsoft.com"
+  read -p "(例如: speed.cloudflare.com): " domain
+  [ -z "$domain" ] && domain="speed.cloudflare.com"
 
   echo
   echo
@@ -376,6 +376,10 @@ if [[ -z $domain ]]; then
 fi
 
 # 配置config.json
+# [防偷跑] 内部回落端口固定 8964, 与安装端口冲突时提醒 (要改就 config 里 dokodemo 的 port 与 reality 的 dest 两处同步改)
+if [[ $port -eq 8964 ]]; then
+  warn "端口 8964 与防偷跑的内部回落端口冲突, 请换一个安装端口"
+fi
 echo
 echo -e "$yellow 配置 /usr/local/etc/xray/config.json $none"
 echo "----------------------------------------------------------------"
@@ -404,6 +408,25 @@ cat > /usr/local/etc/xray/config.json <<-EOF
     //     "udp":false
     //   }
     // },
+    // [防偷跑] REALITY 未授权回落先落到这个 dokodemo 入站, 由 routing 只放行 SNI 一致的流量去真实目标站
+    // 注意: 这里的 address 域名 / 下方 reality 的 serverNames / routing 里 dokodemo-in 的 domain 三处必须一致
+    //       (都用 ${domain} 变量, 天然同步; 日后手改 config.json 时务必三处同改)
+    {
+      "listen": "127.0.0.1",
+      "port": 8964,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "${domain}",    // *** 真实目标站 (原 realitySettings 的 dest 挪到这里)
+        "port": 443,
+        "network": "tcp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["tls"],
+        "routeOnly": true
+      },
+      "tag": "dokodemo-in"
+    },
     {
       "listen": "0.0.0.0",
       "port": ${port},    // ***
@@ -422,7 +445,7 @@ cat > /usr/local/etc/xray/config.json <<-EOF
         "security": "reality",
         "realitySettings": {
           "show": false,
-          "dest": "${domain}:443",    // ***
+          "dest": "127.0.0.1:8964",    // [防偷跑] 指向上面的 dokodemo 入站, 不再直连目标站
           "xver": 0,
           "serverNames": ["${domain}"],    // ***
           "privateKey": "${private_key}",    // ***私钥
@@ -482,6 +505,18 @@ cat > /usr/local/etc/xray/config.json <<-EOF
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+// [防偷跑] 下面两条必须排在所有其它规则之前: dokodemo 回落流量只允许去 ${domain}, 其余 SNI 一律拦截
+      {
+        "type": "field",
+        "inboundTag": ["dokodemo-in"],
+        "domain": ["${domain}"],    // *** 必须与 serverNames 一致
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["dokodemo-in"],
+        "outboundTag": "block"
+      },
 // [routing-rule]
 //{
 //   "type": "field",

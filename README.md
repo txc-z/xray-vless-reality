@@ -1,208 +1,86 @@
-# xray-vless-reality
-Xray, VLESS_Reality模式 极简一键脚本
+# xray-vless-reality（防偷跑版）
 
-# 说明 
-这个一键脚本超级简单。有效语句8行(其中BBR 5行, 安装Xray 1行, 生成x25519公私钥 1行，生成UUID 1行)+Xray配置文件69行(其中你需要修改4行), 其它都是用来检验小白输入错误参数或者搭建条件不满足的。
+Xray **VLESS + REALITY** 极简一键安装脚本，基于 [crazypeace/xray-vless-reality](https://github.com/crazypeace/xray-vless-reality) 修改。
 
-你如果不放心开源的脚本，你可以自己执行那8行有效语句，再修改配置文件中的4行，也能达到一样的效果。
+与原版唯一的实质区别：生成的服务端配置合并了 XTLS 官方的 **REALITY 防偷跑（防被借道）** 写法，未授权回落流量只能到达指定的伪装目标站，无法被他人拿你的服务器 IP 当跳板白嫖目标站的流量。
 
-Reality底层是TCP直连，如果你的VPS已经被墙，那肯定用不了。出门左转 https://github.com/crazypeace/v2ray_wss
+- 参考资料（官方示例）：<https://github.com/XTLS/Xray-examples/blob/main/VLESS-TCP-REALITY%20(without%20being%20stolen)/config_server.jsonc>
+- 脚本安装的 Xray 版本：v25.10.15（脚本内写死）
 
-# 一键安装
+## 防偷跑原理
+
+普通 REALITY 配置里，`realitySettings.dest` 直接填写目标站（如 `speed.cloudflare.com:443`）。任何未授权连接都会被服务端原样转发到目标站——也就是说，任何人都可以把你的服务器 IP 当作通往该目标站的免费跳板（“偷跑流量”），目标站是测速类站点时尤其容易被白嫖带宽。
+
+本版把回落链路拆成两段：
+
 ```
-apt update
-apt install -y curl
-```
-```
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh)
-```
-
-脚本中很大部分都是在校验用户的输入。其实照着下面的步骤自己配置就行了。
-
-# 具体手搓步骤 (点击展开)
-<details>
-    <summary>(点击展开)</summary>
-
-# 打开BBR
-```
-sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-echo "net.ipv4.tcp_congestion_control = bbr" >>/etc/sysctl.conf
-echo "net.core.default_qdisc = fq" >>/etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
+未授权连接 ──► REALITY 入站 (监听端口, 默认 443)
+                │  dest 不再直连目标站, 改指本机内部端口
+                ▼
+             dokodemo-door 入站 (127.0.0.1:8964, tag: dokodemo-in)
+                │  sniffing 嗅出 TLS SNI, routeOnly 只用于路由匹配, 不改写目的地
+                ▼
+             routing 按 inboundTag=dokodemo-in 过滤:
+                ├─ SNI == 伪装域名 → direct 出站 → 伪装域名:443 (真实目标站)
+                └─ 其它任何 SNI    → block 出站 (blackhole, 直接断掉)
 ```
 
+要点：
 
-# 安装Xray
-source: https://github.com/XTLS/Xray-install
-```
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-```
+- **内部回落端口：8964**（写死，只监听 `127.0.0.1`，外部连不进来；安装端口不要设为 8964，脚本会提醒冲突）。
+- dokodemo 的 `settings.address`（真实目标）、REALITY 的 `serverNames`、routing 里 dokodemo-in 的 `domain` 三处域名必须一致。脚本里三处都用同一个 `${domain}` 变量，天然同步；日后手改 `config.json` 时务必三处同改。
+- dokodemo 的 `settings` 不能省：省掉它，dokodemo 会拿连接自身的原始目的地（即它自己的监听地址）当转发目标，形成自拨号死循环，一次探针就能堆满连接、打满文件句柄。
+- 授权客户端完全不受影响：客户端配置、分享链接与原版一致，已部署的客户端不用换。
 
+## 默认值
 
-# 生成 x25519 公钥和私钥
-```
-xray x25519
-```
-私钥会在服务端用到，公钥会在客户端用到。
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| 伪装域名 (SNI / dest) | **speed.cloudflare.com** | 与官方防偷跑示例一致；支持 TLS 1.3 + H2 的境外站点 |
+| 安装端口 | 443 | 不要与内部回落端口 8964 冲突 |
+| UUID | 由本机 IP + 主机名 + 时区派生 | 同一台机器重装不变，节点信息不失效 |
+| 私钥 / 公钥 / ShortId | 由 UUID 派生 | 同上，重装可复现 |
 
+## 使用
 
-# 生成 UUID
-```
-xray uuid
-```
+系统要求：Debian 10+。
 
-# 选一个你喜欢的网站 (SNI)
-比如，`learn.microsoft.com`
-
-
-# 选一个你喜欢的指纹 (Fingerprint)
-可选项见此：https://xtls.github.io/en/config/transport.html 不想选，就用`random`
-![image](https://github.com/crazypeace/xray-vless-reality/assets/665889/89cdc776-95b4-4003-b89f-ac5a48bd1da5)
-
-
-# Reality 协议中定义了 ShortId, SpiderX
-个人使用可以不管，留空
-
-
-# 配置 /usr/local/etc/xray/config.json
-```
-{ // VLESS + Reality
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "listen": "0.0.0.0",
-      "port": 443,    // 理论上可以随便改，不过从访问梯子的行为上，我个人认为使用443比较合适
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "你的UUID",    // ***改这里
-            "flow": "xtls-rprx-vision"
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "dest": "你喜欢的网站:443",    // ***如 learn.microsoft.com:443
-          "xver": 0,
-          "serverNames": ["你喜欢的网站"],    //***如 learn.microsoft.com
-          "privateKey": "你的**私钥**",    // ***改这里
-          "shortIds": [""]    // 可以留空
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls"
-        ]
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "tag": "block"
-    }
-  ],
-  "dns": {
-    "servers": [
-      "8.8.8.8",
-      "1.1.1.1",
-      "2001:4860:4860::8888",
-      "2606:4700:4700::1111",
-      "localhost"
-    ]
-  },
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "rules": [
-      {
-        "type": "field",
-        "ip": ["geoip:private"],
-        "outboundTag": "block"
-      }
-    ]
-  }
-}
+```bash
+bash <(curl -L https://raw.githubusercontent.com/txc-z/xray-vless-reality/main/install.sh)
 ```
 
-# 客户端参数配置
-脚本最后会输出VLESS链接，方便你导入翻墙客户端。
+带参数执行（跳过交互）：
 
-如果你是手搓自建，请参考下图配置。特别需要注意的是，客户端用的是**公钥**。和服务端用的**私钥**不一样。
-![image](https://github.com/crazypeace/xray-vless-reality/assets/665889/52a943aa-ba8b-4a4a-a7ca-21c75807d678)
-
-如果你是手搓VLESS链接，那么参考：https://github.com/XTLS/Xray-core/discussions/716
-如 `vless://${xray_id}@${ip}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&type=tcp#VLESS_R_${ip}`
-
-# 如果是 IPv6 only 的小鸡，用 WARP 添加 IPv4 出站能力
-```
-bash <(curl -L git.io/warp.sh) 4
+```bash
+# 参数依次为: 网络栈(4/6) 端口 域名 UUID, 缺省项用默认值
+bash install.sh 4 443 speed.cloudflare.com
 ```
 
-</details>
+或用环境变量（定义任意一个即进入环境变量模式，忽略命令行参数）：
 
-# Uninstall
-```
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
-```
-
-# 私货
-对于喜欢V2rayN PAC模式的朋友，欢迎使用支持Reality的 [v2rayN-3.29-VLESS](https://github.com/crazypeace/v2rayN-3.29-VLESS)
-![image](https://github.com/crazypeace/xray-vless-reality/assets/665889/c45c11a1-e326-4c70-9c55-8ec45608c472)
-
-# 脚本支持带参数运行
-```
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh) <netstack> [port] [domain] [UUID]
+```bash
+_MYIP_=1.2.3.4 _MYPORT_=443 _MYDOMAIN_=speed.cloudflare.com _MYUUID_=<uuid> bash install.sh
 ```
 
-其中, 
+安装完成后脚本会打印节点信息与二维码，并把分享链接存到 `~/_vless_reality_url_`。
 
-`netstack` 6 表示 IPv6 入站; 4 表示 IPv4 入站.
+节点参数：VLESS + TCP + REALITY，flow 为 `xtls-rprx-vision`，指纹 `random`。
 
-`port` 端口. 不写的话, 默认443
+## 与原版的差异一览
 
-`domain` 你指定的网站域名. 不写的话, 默认 learn.microsoft.com
+只改了脚本生成 `config.json` 的部分，其余（安装流程、BBR、WARP、出站与分流规则、链接输出）与原版一致：
 
-`UUID` 你的UUID. 不写的话, 自动生成
+1. 新增 dokodemo-door 入站（`127.0.0.1:8964`，tls 嗅探 + `routeOnly`）；
+2. `realitySettings.dest` 由 `${domain}:443` 改为 `127.0.0.1:8964`；
+3. routing 规则最前面新增两条 dokodemo-in 规则（域名命中 → direct，其余 → block，均带 `"type": "field"`，因此生成配置在 Xray 1.8.0 上也能加载）；
+4. 默认域名由 `learn.microsoft.com` 改为 `speed.cloudflare.com`；
+5. 安装端口为 8964 时给出冲突提醒。
 
-例如,
-```
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh) 6
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh) 6 443
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh) 6 443 learn.microsoft.com
-bash <(curl -L https://github.com/crazypeace/xray-vless-reality/raw/main/install.sh) 6 443 learn.microsoft.com 1b0b723f-0544-4f9c-8df8-2b8975c5e47a
-```
+## 验证记录
 
-# 脚本支持用环境变量设置参数
-当定义了至少一个环境变量后, 参数就被忽略, 以环境变量为准  
-当定义了至少一个环境变量后, 跳过交互式流程, 未设置的参数使用默认值  
+本仓库的 install.sh 生成的配置已实测（Xray 26.10.31）：
 
-你可以设置长期有效的环境变量, 如  
-```
-export _MYIP_=1.2.3.4
-export _MYPORT_=8443
-export _MYDOMAIN_=example.com
-export _MYUUID_=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-bash install.sh
-```
-
-你也可以使用只在脚本执行时有效的环境变量, 如  
-```
-_MYIP_="1.2.3.4" bash install.sh
-```
-
-# 用你的STAR告诉我这个Repo对你有用 Welcome STARs! :)
-[![Stargazers over time](https://starchart.cc/crazypeace/xray-vless-reality.svg)](https://starchart.cc/crazypeace/xray-vless-reality)
+- 授权客户端经隧道访问目标站：HTTP 200；
+- 未授权探针带正确 SNI 回落：拿到目标站真实证书（校验通过）；
+- 未授权探针带其它 SNI：被 routing 拦截（服务端日志 `taking detour [block]`），无证书返回；
+- 生成配置在 Xray 1.8.0 / 24.9.30 / 26.10.31 上均通过 `xray run -test`。
